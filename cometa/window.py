@@ -38,10 +38,6 @@ def content_width(cards: int) -> int:
     return 2 * MARGIN + cards * (CARD_WIDTH + GAP) + RAIL
 
 
-def content_height() -> int:
-    return 2 * MARGIN + CARD_HEIGHT
-
-
 @lru_cache(maxsize=8)
 def _shadow(width: int, height: int, radius: float, strength: int) -> QPixmap:
     """Soft drop shadow for a rounded shape, padded by 2 x blur on every side."""
@@ -57,6 +53,27 @@ def _shadow(width: int, height: int, radius: float, strength: int) -> QPixmap:
     return QPixmap.fromImage(_blur_image(img, SHADOW_BLUR, QColor(0, 0, 0, 0)))
 
 
+def _draw_shadow(p: QPainter, rect: QRect, radius: float, strength: int) -> None:
+    """Soft shadow under `rect`. Big shapes are 9-sliced from one small cached shadow,
+    so any card height (the task panel animates it) costs no new blur."""
+    pad = 2 * SHADOW_BLUR
+    target = QRect(rect.x() - pad, rect.y() - pad + 8, rect.width() + 2 * pad, rect.height() + 2 * pad)
+    c = pad + int(radius) + SHADOW_BLUR  # corner slice: blur + rounded corner + falloff
+    if target.width() <= 2 * c or target.height() <= 2 * c:
+        p.drawPixmap(target.topLeft(), _shadow(rect.width(), rect.height(), radius, strength))
+        return
+    core = 2 * (c - pad) + 1
+    tile = _shadow(core, core, radius, strength)  # (2c + 1) square
+    t = tile.width()
+    columns = ((0, c, target.x(), c), (c, t - 2 * c, target.x() + c, target.width() - 2 * c),
+               (t - c, c, target.x() + target.width() - c, c))
+    rows = ((0, c, target.y(), c), (c, t - 2 * c, target.y() + c, target.height() - 2 * c),
+            (t - c, c, target.y() + target.height() - c, c))
+    for sx, sw, dx, dw in columns:
+        for sy, sh, dy, dh in rows:
+            p.drawPixmap(QRect(dx, dy, dw, dh), tile, QRect(sx, sy, sw, sh))
+
+
 class Surface(QWidget):
     """Transparent canvas under the floating cards: soft drop shadows, plus an invisible
     (1/255) fill between the cards so the whole widget stays hoverable and draggable."""
@@ -70,7 +87,6 @@ class Surface(QWidget):
         p = QPainter(self)
         inner = self.rect().adjusted(MARGIN - 8, MARGIN - 8, 8 - MARGIN, 8 - MARGIN)
         p.fillRect(inner.intersected(dirty), QColor(0, 0, 0, 1))
-        pad = 2 * SHADOW_BLUR
         for widget, radius, strength in self._owner.floating_items():
             rect = QRect(widget.mapTo(self, QPoint(0, 0)), widget.size())
             if rect.contains(dirty):
@@ -80,8 +96,7 @@ class Surface(QWidget):
             if opacity <= 0.01:
                 continue
             p.setOpacity(opacity)
-            p.drawPixmap(rect.x() - pad, rect.y() - pad + 8,
-                         _shadow(rect.width(), rect.height(), radius, strength))
+            _draw_shadow(p, rect, radius, strength)
         p.setOpacity(1.0)
 
     def mousePressEvent(self, event) -> None:
@@ -194,7 +209,7 @@ class MainWindow(QMainWindow):
         # card slots get inserted at index len(cards), before the rail
         self.rail = Rail()
         self.rail.setFixedHeight(CARD_HEIGHT)
-        self.row_layout.addWidget(self.rail, 0, Qt.AlignmentFlag.AlignVCenter)
+        self.row_layout.addWidget(self.rail, 0, Qt.AlignmentFlag.AlignTop)
         self.row_layout.addStretch(1)
         self.scroll.setWidget(self.row)
         self.row.setAutoFillBackground(False)  # setWidget() turns it on
@@ -225,8 +240,8 @@ class MainWindow(QMainWindow):
         wallpaper_watch.timeout.connect(self._refresh_wallpaper)
         wallpaper_watch.start(5000)
 
-        self.setMinimumSize(content_width(1), content_height())
-        self.setMaximumHeight(content_height())
+        self.setMinimumWidth(content_width(1))
+        self.setFixedHeight(self._content_height())
         self._place()
         self._refresh_ticker()
         self._update_title()
@@ -260,6 +275,10 @@ class MainWindow(QMainWindow):
         if handle is not None:
             handle.setFlag(Qt.WindowType.WindowStaysOnTopHint, on)  # live, without re-creating
         allow_minimize(self)
+        # On Windows the flag change can reset the translucent (layered) window surface, so
+        # only the parts that keep repainting (the dial) would come back: repaint everything.
+        self.update()
+        QTimer.singleShot(60, self.update)
         self._persist()
 
     def contextMenuEvent(self, event) -> None:
@@ -289,6 +308,8 @@ class MainWindow(QMainWindow):
         card.reset_requested.connect(self._on_reset)
         card.remove_requested.connect(self._on_remove)
         card.rename_requested.connect(self._on_rename)
+        card.tasks_changed.connect(lambda _card: self._persist())
+        card.height_changed.connect(self._fit_height)
         card.recolor_requested.connect(self._on_recolor)
         return card
 
@@ -297,9 +318,9 @@ class MainWindow(QMainWindow):
         layout = QHBoxLayout(slot)
         layout.setContentsMargins(0, 0, GAP, 0)
         layout.setSpacing(0)
-        layout.addWidget(card, 0, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter)
-        slot.setFixedSize(CARD_WIDTH + GAP if width is None else width, CARD_HEIGHT)
-        self.row_layout.insertWidget(len(self.cards), slot, 0, Qt.AlignmentFlag.AlignVCenter)
+        layout.addWidget(card, 0, Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
+        slot.setFixedWidth(CARD_WIDTH + GAP if width is None else width)
+        self.row_layout.insertWidget(len(self.cards), slot, 0, Qt.AlignmentFlag.AlignTop)
         self.cards.append(card)
         return slot
 
@@ -384,6 +405,7 @@ class MainWindow(QMainWindow):
             def drop() -> None:
                 self.row_layout.removeWidget(slot)
                 slot.deleteLater()
+                self._fit_height()  # the removed card may have been the tallest
                 self.surface.update()
 
             self._animate_slot(slot, slot.width(), 0,
@@ -580,7 +602,7 @@ class MainWindow(QMainWindow):
 
     def _place(self) -> None:
         """Restore the last position (the size always follows the cards) or center it."""
-        width, height = content_width(len(self.cards)), content_height()
+        width, height = content_width(len(self.cards)), self._content_height()
         if self.state.geometry:
             try:
                 self.restoreGeometry(QByteArray.fromBase64(self.state.geometry.encode("ascii")))
@@ -598,6 +620,21 @@ class MainWindow(QMainWindow):
         x = max(screen.left(), min(self.x(), screen.right() + 1 - width))
         y = max(screen.top(), min(self.y(), screen.bottom() + 1 - height))
         self.setGeometry(x, y, width, height)
+
+    def _content_height(self) -> int:
+        return 2 * MARGIN + max((card.height() for card in self.cards), default=CARD_HEIGHT)
+
+    def _fit_height(self, *_) -> None:
+        """Follow the tallest card (task panels grow and shrink), growing downwards."""
+        needed = self._content_height()
+        if self.height() == needed and self.minimumHeight() == needed:
+            return
+        self.setFixedHeight(needed)
+        if self.isVisible():
+            screen = (self.screen() or QGuiApplication.primaryScreen()).availableGeometry()
+            if self.y() + needed > screen.bottom() + 1:
+                self.move(self.x(), max(screen.top(), screen.bottom() + 1 - needed))
+        self.surface.update()
 
     def bring_to_front(self) -> None:
         if self.isMinimized():

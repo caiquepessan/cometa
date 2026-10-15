@@ -125,6 +125,38 @@ def reset(p: QPainter, rect: QRectF, color: QColor) -> None:
         g.drawPolyline(QPolygonF([back(40), end, back(-40)]))
 
 
+def checklist(p: QPainter, rect: QRectF, color: QColor) -> None:
+    """Rounded box with a check mark: the task list toggle."""
+    with _Grid(p, rect) as g:
+        g.setPen(_pen(color, 1.9))
+        g.setBrush(Qt.BrushStyle.NoBrush)
+        g.drawRoundedRect(QRectF(4, 4, 16, 16), 4.6, 4.6)
+        g.drawPolyline(QPolygonF([QPointF(8.3, 12.3), QPointF(11.0, 14.9), QPointF(15.9, 9.5)]))
+
+
+_CHECK = ((6.4, 12.6), (10.3, 16.3), (17.8, 8.0))
+
+
+def check(p: QPainter, rect: QRectF, color: QColor, progress: float = 1.0) -> None:
+    """Check mark, drawn up to `progress` (0 → 1) of its length so it can animate in."""
+    progress = max(0.0, min(1.0, progress))
+    if progress <= 0.0:
+        return
+    segments = list(zip(_CHECK, _CHECK[1:]))
+    lengths = [math.hypot(b[0] - a[0], b[1] - a[1]) for a, b in segments]
+    remaining = progress * sum(lengths)
+    points = [QPointF(*_CHECK[0])]
+    for (a, b), length in zip(segments, lengths):
+        k = min(1.0, remaining / length)
+        points.append(QPointF(a[0] + (b[0] - a[0]) * k, a[1] + (b[1] - a[1]) * k))
+        remaining -= length
+        if remaining <= 0:
+            break
+    with _Grid(p, rect) as g:
+        g.setPen(_pen(color, 2.6))
+        g.drawPolyline(QPolygonF(points))
+
+
 def plus(p: QPainter, rect: QRectF, color: QColor, width: float = 1.8) -> None:
     with _Grid(p, rect) as g:
         g.setPen(_pen(color, width))

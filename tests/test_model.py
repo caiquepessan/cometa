@@ -8,7 +8,7 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from cometa import model  # noqa: E402
-from cometa.model import AppState, Stopwatch, Store, format_hms, split_time  # noqa: E402
+from cometa.model import AppState, Stopwatch, Store, Task, format_hms, split_time  # noqa: E402
 
 
 class Clock:
@@ -132,6 +132,29 @@ class StoreTests(unittest.TestCase):
         ]}), encoding="utf-8")
         names = [(s.name, s.accumulated) for s in self.store.load().stopwatches]
         self.assertEqual(names, [("Ok", 7.0)])
+
+    def test_tasks_round_trip(self) -> None:
+        sw = Stopwatch(name="Projeto", tasks_open=True,
+                       tasks=[Task("Escrever testes"), Task("Revisar PR", done=True)])
+        self.store.save(AppState([sw]))
+        loaded = self.store.load().stopwatches[0]
+        self.assertTrue(loaded.tasks_open)
+        self.assertEqual([(t.text, t.done) for t in loaded.tasks],
+                         [("Escrever testes", False), ("Revisar PR", True)])
+        self.assertEqual([t.id for t in loaded.tasks], [t.id for t in sw.tasks])
+
+    def test_state_saved_with_a_bom_still_loads(self) -> None:
+        self.store.path.write_text(json.dumps({"stopwatches": [{"name": "Editado à mão"}]}),
+                                   encoding="utf-8-sig")
+        self.assertEqual([s.name for s in self.store.load().stopwatches], ["Editado à mão"])
+        self.assertEqual(list(Path(self.tmp.name).glob("state.corrupt-*.json")), [])
+
+    def test_invalid_tasks_are_skipped(self) -> None:
+        self.store.path.write_text(json.dumps({"stopwatches": [{"name": "P", "tasks": [
+            "nope", {"text": "   "}, {"text": "  Ler   o capítulo  ", "done": 1}, {"done": True},
+        ]}]}), encoding="utf-8")
+        tasks = self.store.load().stopwatches[0].tasks
+        self.assertEqual([(t.text, t.done) for t in tasks], [("Ler o capítulo", True)])
 
     def test_default_store_picks_up_data_from_pre_rename_builds(self) -> None:
         base = Path(self.tmp.name)

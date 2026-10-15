@@ -12,11 +12,13 @@ from . import icons, theme
 from .dial import Dial
 from .glass import WallpaperGlass
 from .model import IDLE, PAUSED, RUNNING, Stopwatch
+from .tasks import TaskPanel, TasksButton
 from .widgets import AccentDot, IconButton, NameField, PrimaryButton, Tween
 
 CARD_WIDTH = 320
-CARD_HEIGHT = 448
+CARD_HEIGHT = 448  # without the task panel
 RADIUS = 26.0
+DIAL_GAP = 29
 
 
 class StopwatchCard(QWidget):
@@ -26,6 +28,8 @@ class StopwatchCard(QWidget):
     remove_requested = Signal(object)
     rename_requested = Signal(object, str)
     recolor_requested = Signal(object)
+    tasks_changed = Signal(object)  # tasks edited, or the panel opened / closed
+    height_changed = Signal(object)  # the task panel is growing or shrinking
 
     def __init__(self, sw: Stopwatch, glass: WallpaperGlass | None = None,
                  parent: QWidget | None = None) -> None:
@@ -36,12 +40,14 @@ class StopwatchCard(QWidget):
         self._removable = True
         self._layer: QPixmap | None = None
         self._layer_key: tuple | None = None
-        self.setFixedSize(CARD_WIDTH, CARD_HEIGHT)
+        self.setFixedWidth(CARD_WIDTH)
         self._live = Tween(self, 1.0 if sw.running else 0.0, 480)
         self._hover = Tween(self, 0.0, 180, on_change=self._on_hover)
 
         self.dot = AccentDot(self._accent)
         self.name = NameField(sw.name, self._accent)
+        self.tasks_btn = TasksButton(self._accent)
+        self.tasks_btn.setChecked(sw.tasks_open)
         self.delete_btn = IconButton(icons.trash, size=30, icon_size=16, variant="plain",
                                      danger=True, tooltip="Remover cronômetro")
         self.delete_btn.set_reveal(0.0)
@@ -51,6 +57,7 @@ class StopwatchCard(QWidget):
         self.primary = PrimaryButton(self._accent)
         self.stop_btn = IconButton(icons.stop, size=52, icon_size=17, variant="ghost",
                                    danger=True, tooltip="Parar (finaliza a contagem)")
+        self.panel = TaskPanel(sw, self._accent)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(20, 16, 20, 20)
@@ -60,11 +67,12 @@ class StopwatchCard(QWidget):
         header.setSpacing(8)
         header.addWidget(self.dot)
         header.addWidget(self.name, 1)
+        header.addWidget(self.tasks_btn)
         header.addWidget(self.delete_btn)
         layout.addLayout(header)
-        layout.addStretch(1)
+        layout.addSpacing(DIAL_GAP)
         layout.addWidget(self.dial, 0, Qt.AlignmentFlag.AlignHCenter)
-        layout.addStretch(1)
+        layout.addSpacing(DIAL_GAP)
         controls = QHBoxLayout()
         controls.setContentsMargins(0, 0, 0, 0)
         controls.setSpacing(10)
@@ -72,6 +80,7 @@ class StopwatchCard(QWidget):
         controls.addWidget(self.primary, 1)
         controls.addWidget(self.stop_btn)
         layout.addLayout(controls)
+        layout.addWidget(self.panel)
 
         self.primary.clicked.connect(lambda: self.toggle_requested.emit(self))
         self.stop_btn.clicked.connect(lambda: self.stop_requested.emit(self))
@@ -79,6 +88,12 @@ class StopwatchCard(QWidget):
         self.delete_btn.clicked.connect(lambda: self.remove_requested.emit(self))
         self.dot.clicked.connect(lambda: self.recolor_requested.emit(self))
         self.name.committed.connect(lambda text: self.rename_requested.emit(self, text))
+        self.tasks_btn.toggled.connect(self.set_tasks_open)
+        self.panel.changed.connect(self._on_tasks_edited)
+        self.panel.height_wanted.connect(self._on_panel_resized)
+        self._panel_height = Tween(self, 0.0, 280, on_change=self._apply_panel_height)
+        self._panel_height.set(self.panel.natural_height() if sw.tasks_open else 0.0)
+        self.tasks_btn.set_counts(*self.panel.counts())
         self.sync(animate=False)
 
     def sync(self, animate: bool = True) -> None:
@@ -99,9 +114,35 @@ class StopwatchCard(QWidget):
 
     def set_accent(self, index: int) -> None:
         self._accent = theme.accent(index)
-        for widget in (self.dot, self.name, self.dial, self.primary):
+        for widget in (self.dot, self.name, self.dial, self.primary, self.tasks_btn, self.panel):
             widget.set_accent(self._accent)
         self.update()
+
+    # ----- task panel --------------------------------------------------------------------
+
+    def set_tasks_open(self, open_: bool) -> None:
+        if self.tasks_btn.isChecked() != open_:
+            self.tasks_btn.setChecked(open_)  # re-enters through the toggled signal
+            return
+        self.sw.tasks_open = open_
+        self._panel_height.to(self.panel.natural_height() if open_ else 0.0)
+        if open_ and not self.sw.tasks:
+            self.panel.focus_input()  # nothing to show yet: ready to type the first task
+        self.tasks_changed.emit(self)
+
+    def _on_tasks_edited(self) -> None:
+        self.tasks_btn.set_counts(*self.panel.counts())
+        self.tasks_changed.emit(self)
+
+    def _on_panel_resized(self) -> None:
+        if self.sw.tasks_open:
+            self._panel_height.to(self.panel.natural_height())
+
+    def _apply_panel_height(self, value: float) -> None:
+        height = max(0, round(value))
+        self.panel.setFixedHeight(height)
+        self.setFixedHeight(CARD_HEIGHT + height)
+        self.height_changed.emit(self)
 
     def set_removable(self, removable: bool) -> None:
         self._removable = removable

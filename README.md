@@ -23,6 +23,8 @@
   e o botão **+**. Fica sempre no topo (se você quiser) e se move arrastando o próprio cartão.
 - **Vários ao mesmo tempo.** Um cronômetro por projeto, matéria ou tarefa, lado a lado, cada
   um com nome e cor.
+- **Tarefas em cada cronômetro.** Liste o que falta fazer naquele projeto, marque como
+  concluído e acompanhe o progresso pela barra e pelo contador no topo do cartão.
 - **Sem sustos.** Pausar é instantâneo; Parar, Zerar e Remover pedem confirmação dentro do
   próprio cartão.
 - **Leve.** Um cometa de luz dá a volta no mostrador a cada minuto, e com tudo parado o app
@@ -54,6 +56,7 @@ Prefere não instalar? Rode `app\Cometa.exe` direto da pasta extraída.
 | Renomear | clique no nome (Enter confirma, Esc cancela) |
 | Trocar a cor | clique na bolinha ao lado do nome |
 | Remover | passe o mouse no cartão e use a lixeira |
+| Tarefas | botão ☑ no topo do cartão; Enter adiciona, o círculo marca como concluída, duplo clique edita e o × remove |
 | Mover a janela | arraste qualquer cartão |
 | Fechar, minimizar e sempre no topo | aparecem ao lado do **+** ao passar o mouse, ou no clique direito |
 

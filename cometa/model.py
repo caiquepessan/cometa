@@ -26,6 +26,24 @@ def now() -> float:
 
 
 IDLE, RUNNING, PAUSED, FINISHED = "idle", "running", "paused", "finished"
+MAX_TASK_LENGTH = 120
+
+
+@dataclass
+class Task:
+    text: str
+    done: bool = False
+    id: str = field(default_factory=lambda: uuid.uuid4().hex)
+
+    def to_dict(self) -> dict:
+        return {"id": self.id, "text": self.text, "done": self.done}
+
+    @classmethod
+    def from_dict(cls, data: dict) -> Task:
+        text = " ".join(str(data.get("text") or "").split())[:MAX_TASK_LENGTH]
+        if not text:
+            raise ValueError("empty task")
+        return cls(text=text, done=bool(data.get("done")), id=str(data.get("id") or uuid.uuid4().hex))
 
 
 @dataclass
@@ -35,6 +53,8 @@ class Stopwatch:
     accumulated: float = 0.0  # seconds banked by previous runs
     started_at: float | None = None  # epoch seconds when the current run began
     finished: bool = False  # stopped for good: the next start counts from zero
+    tasks: list[Task] = field(default_factory=list)
+    tasks_open: bool = False  # whether the card shows its task list
     id: str = field(default_factory=lambda: uuid.uuid4().hex)
 
     @property
@@ -87,6 +107,8 @@ class Stopwatch:
             "accumulated": round(self.accumulated, 3),
             "started_at": self.started_at,
             "finished": self.finished,
+            "tasks": [task.to_dict() for task in self.tasks],
+            "tasks_open": self.tasks_open,
         }
 
     @classmethod
@@ -100,12 +122,19 @@ class Stopwatch:
             started_at = float(started_at)
             if not math.isfinite(started_at) or started_at <= 0:
                 started_at = None
+        tasks = []
+        for item in data.get("tasks") or []:
+            if isinstance(item, dict):
+                with contextlib.suppress(TypeError, ValueError):
+                    tasks.append(Task.from_dict(item))
         return cls(
             name=name,
             accent=int(data.get("accent") or 0),
             accumulated=accumulated,
             started_at=started_at,
             finished=bool(data.get("finished")) and started_at is None,
+            tasks=tasks,
+            tasks_open=bool(data.get("tasks_open")),
             id=str(data.get("id") or uuid.uuid4().hex),
         )
 
@@ -151,7 +180,8 @@ class Store:
         if not source.exists() and self._legacy is not None and self._legacy.exists():
             source = self._legacy  # first run after the rename; the next save moves it over
         try:
-            raw = json.loads(source.read_text(encoding="utf-8"))
+            # utf-8-sig: files saved by Notepad and PowerShell 5.1 start with a BOM.
+            raw = json.loads(source.read_text(encoding="utf-8-sig"))
             if not isinstance(raw, dict):
                 raise ValueError("state root is not an object")
         except FileNotFoundError:
